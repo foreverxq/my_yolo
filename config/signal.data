@@ -1,5 +1,5 @@
 classes= 80
-train=D:/transfer/coco2014/coco/trainvalno5k.txt
+train=C:\Users\华为\Desktop\Modulation_Detection\data\train
 valid=D:/transfer/coco2014/coco/5k.txt
 names=data/coco.names
 backup=backup/

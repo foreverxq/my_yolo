@@ -1,154 +1,156 @@
-import glob
-import random
+# from .config import HOME
 import os
 import sys
-import numpy as np
-from PIL import Image
 import torch
-import torch.nn.functional as F
-
-from utils.augmentations import horisontal_flip
-from torch.utils.data import Dataset
-import torchvision.transforms as transforms
-
-
-def pad_to_square(img, pad_value):
-    c, h, w = img.shape
-    dim_diff = np.abs(h - w)
-    # (upper / left) padding and (lower / right) padding
-    pad1, pad2 = dim_diff // 2, dim_diff - dim_diff // 2
-    # Determine padding
-    pad = (0, 0, pad1, pad2) if h <= w else (pad1, pad2, 0, 0)
-    # Add padding
-    img = F.pad(img, pad, "constant", value=pad_value)
-
-    return img, pad
+import torch.utils.data as data
+import scipy.io as sio
+import numpy as np
+# from data_augmentation import *
+from utils.data_augmentation import *
 
 
-def resize(image, size):
-    image = F.interpolate(image.unsqueeze(0), size=size, mode="nearest").squeeze(0)
-    return image
+def concat_data(path_):
+    path = path_ + '_'
+    # data_ = np.load(path +'1.npy')
+    print(path_)
+    path = os.path.abspath(path)
+    data_ = np.load(path+'1.npz',allow_pickle = True)['datas_10_fft']
+    data_RC20 = np.load(path + '1.npz', allow_pickle=True)['datas_RC20']
+    data_RC40 = np.load(path + '1.npz', allow_pickle=True)['datas_RC40']
+    data_80 = np.load(path + '1.npz', allow_pickle=True)['datas_80_fft']
+    i = 2
+    while os.path.exists(path + str(i) + '.npz'):
+        print('loading data '+path + str(i) + '.npz....')
+        new_data = np.load(path + str(i) + '.npz', allow_pickle=True)['datas_10_fft']
+        new_data_RC20 = np.load(path + str(i) + '.npz', allow_pickle=True)['datas_RC20']
+        new_data_RC40 = np.load(path + str(i) + '.npz', allow_pickle=True)['datas_RC40']
+        new_data_80 = np.load(path + str(i) + '.npz', allow_pickle=True)['datas_80_fft']
+        data_ = np.concatenate((data_, new_data), axis=0)
+        data_RC20 = np.concatenate((data_RC20, new_data_RC20), axis=0)
+        data_RC40 = np.concatenate((data_RC40, new_data_RC40), axis=0)
+        data_80 = np.concatenate((data_80, new_data_80), axis=0)
+        i += 1
+    return data_,data_80,data_RC20,data_RC40
 
 
-def random_resize(images, min_size=288, max_size=448):
-    new_size = random.sample(list(range(min_size, max_size + 1, 32)), 1)[0]
-    images = F.interpolate(images, size=new_size, mode="nearest")
-    return images
 
+def concat_label(path_):
+    path = path_ + '_'
+    # data_ = np.load(path +'1.npy')
+    print(path_)
+    path=os.path.abspath(path)
+    data_ = np.load(path+'1.npz',allow_pickle = True)['labels']
+    i = 2
+    while os.path.exists(path + str(i) + '.npz'):
+        print('loading data '+path + str(i) + '.npz....')
+        new_data = np.load(path + str(i) + '.npz', allow_pickle=True)['labels']
+        data_ = np.concatenate((data_, new_data), axis=0)
+        i += 1
+    return data_
 
-class ImageFolder(Dataset):
-    def __init__(self, folder_path, img_size=416):
-        self.files = sorted(glob.glob("%s/*.*" % folder_path))
-        self.img_size = img_size
+class SignalDetectionv2(data.Dataset):
+    def __init__(self, data_root, label_root, data_aug=False, dataset_name='SignalDetedtion'):
+        self.data_root = data_root
+        self.label_root = label_root
+        self.data,self.data_80,self.dataRC20,self.dataRC40, self.labels = self.load_json()
+        self.data_aug = data_aug
+        self.dataset_name = dataset_name
 
-    def __getitem__(self, index):
-        img_path = self.files[index % len(self.files)]
-        # Extract image as PyTorch tensor
-        img = transforms.ToTensor()(Image.open(img_path))
-        # Pad to square resolution
-        img, _ = pad_to_square(img, 0)
-        # Resize
-        img = resize(img, self.img_size)
+    def __getitem__(self, idx):
+        seq = np.array(self.data[idx])
+        seq_80 = np.array(self.data_80[idx])
+        seq_RC20 = np.array(self.dataRC20[idx])
+        seq_RC40 = np.array(self.dataRC40[idx])
+        seq_label = np.array(self.labels[idx])
+        if self.data_aug:
+            # max_value = np.max(seq, axis=(0, 1))
+            roll = np.random.rand(1)
+            if roll < 0.5:
+                seq,seq_80,seq_RC20,seq_RC40, seq_label = sample_filplr(seq,seq_80,seq_RC20,seq_RC40, seq_label)
+            seq,seq_80,seq_RC20,seq_RC40, seq_label = sample_jitter(seq,seq_80,seq_RC20,seq_RC40, seq_label)
+            seq,seq_80,seq_RC20,seq_RC40, seq_label = sample_shift(seq,seq_80,seq_RC20,seq_RC40, seq_label)
 
-        return img_path, img
+        import scipy.io as scio
+        # scio.savemat('1.mat',
+        #              {'new_data': seq, 'new_dataRC20': seq_RC20, 'new_dataRC40': seq_RC40, 'label': seq_label})
 
-    def __len__(self):
-        return len(self.files)
+        #转换为torch
+        seq = torch.from_numpy(seq).type(torch.FloatTensor)
+        seq_80 = torch.from_numpy(seq_80).type(torch.FloatTensor)
+        seq_RC20 = torch.from_numpy(seq_RC20).type(torch.FloatTensor)
+        seq_RC40 = torch.from_numpy(seq_RC40).type(torch.FloatTensor)
 
+        # n x 3, n is the number of objects for each sequence
+        labels = torch.from_numpy(seq_label).type(torch.FloatTensor).view(-1, 3)
 
-class ListDataset(Dataset):
-    def __init__(self, list_path, img_size=416, augment=True, multiscale=True, normalized_labels=True):
-        with open(list_path, "r") as file:
-            self.img_files = file.readlines()
-
-        self.label_files = [
-            path.replace("images", "labels").replace(".png", ".txt").replace(".jpg", ".txt")
-            for path in self.img_files
-        ]
-        self.img_size = img_size
-        self.max_objects = 100
-        self.augment = augment
-        self.multiscale = multiscale
-        self.normalized_labels = normalized_labels
-        self.min_size = self.img_size - 3 * 32
-        self.max_size = self.img_size + 3 * 32
-        self.batch_count = 0
-
-    def __getitem__(self, index):
-
-        # ---------
-        #  Image
-        # ---------
-
-        img_path = self.img_files[index % len(self.img_files)].rstrip()
-
-        # Extract image as PyTorch tensor
-        img = transforms.ToTensor()(Image.open(img_path).convert('RGB'))
-
-        # Handle images with less than three channels
-        if len(img.shape) != 3:
-            img = img.unsqueeze(0)
-            img = img.expand((3, img.shape[1:]))
-
-        _, h, w = img.shape
-        h_factor, w_factor = (h, w) if self.normalized_labels else (1, 1)
-        # Pad to square resolution
-        img, pad = pad_to_square(img, 0)
-        _, padded_h, padded_w = img.shape
-
-        # ---------
-        #  Label
-        # ---------
-
-        label_path = self.label_files[index % len(self.img_files)].rstrip()
-
-        targets = None
-        if os.path.exists(label_path):
-            boxes = torch.from_numpy(np.loadtxt(label_path).reshape(-1, 5))
-            # Extract coordinates for unpadded + unscaled image
-            x1 = w_factor * (boxes[:, 1] - boxes[:, 3] / 2)
-            y1 = h_factor * (boxes[:, 2] - boxes[:, 4] / 2)
-            x2 = w_factor * (boxes[:, 1] + boxes[:, 3] / 2)
-            y2 = h_factor * (boxes[:, 2] + boxes[:, 4] / 2)
-            # Adjust for added padding
-            x1 += pad[0]
-            y1 += pad[2]
-            x2 += pad[1]
-            y2 += pad[3]
-            # Returns (x, y, w, h)
-            boxes[:, 1] = ((x1 + x2) / 2) / padded_w
-            boxes[:, 2] = ((y1 + y2) / 2) / padded_h
-            boxes[:, 3] *= w_factor / padded_w
-            boxes[:, 4] *= h_factor / padded_h
-
-            targets = torch.zeros((len(boxes), 6))
-            targets[:, 1:] = boxes
-
-        # Apply augmentations
-        if self.augment:
-            if np.random.random() < 0.5:
-                img, targets = horisontal_flip(img, targets)
-
-        return img_path, img, targets
-
-    def collate_fn(self, batch):
-        paths, imgs, targets = list(zip(*batch))
-        # Remove empty placeholder targets
-        targets = [boxes for boxes in targets if boxes is not None]
-        # Add sample index to targets
-        for i, boxes in enumerate(targets):
-            boxes[:, 0] = i
-        targets = torch.cat(targets, 0)
-        # Selects new image size every tenth batch
-        if self.multiscale and self.batch_count % 10 == 0:
-            self.img_size = random.choice(range(self.min_size, self.max_size + 1, 32))
-        # Resize images to input shape
-        imgs = torch.stack([resize(img, self.img_size) for img in imgs])
-        self.batch_count += 1
-        return paths, imgs, targets
+        return seq ,seq_80,seq_RC20, seq_RC40, labels
 
     def __len__(self):
-        return len(self.img_files)
+        return len(self.data)
+
+    def load_json(self):
+        dirs = os.listdir(self.label_root)
+        for label_name in dirs:
+            if label_name.endswith('.npz'):
+                label = np.load(os.path.join(self.label_root, label_name), allow_pickle=True)['labels']
+        dirs = os.listdir(self.data_root)
+        for data_name in dirs:
+            if data_name.endswith('.npz'):
+                data = np.load(os.path.join(self.data_root, data_name), allow_pickle=True)['datas_10_fft']
+                data_RC20 = np.load(os.path.join(self.data_root, data_name), allow_pickle=True)['datas_RC20']
+                data_RC40 = np.load(os.path.join(self.data_root, data_name), allow_pickle=True)['datas_RC40']
+                data_80 = np.load(os.path.join(self.data_root, data_name), allow_pickle=True)['datas_80_fft']
+        return data,data_80,data_RC20,data_RC40, label
+
+    def pull_seq(self, idx):
+        """
+        return m x 8192 np.array
+        """
+        return self.data[idx],self.data_80[idx],self.dataRC20[idx],self.dataRC40[idx]
+
+    def pull_anno(self, idx):
+        """
+        return  n x 3 np.array
+         """
+        labels = np.reshape(self.labels[idx], [-1, 3])
+        return str(idx), labels
 
 
-# if __name__ == '__main__':
+def detection_collate(batch):
+
+    targets = []
+    imgs = []
+    imgs_RC20 = []
+    imgs_RC40 = []
+    imgs_80 = []
+    for sample in batch:
+        imgs.append(sample[0])
+        imgs_80.append(sample[1])
+        imgs_RC20.append(sample[2])
+        imgs_RC40.append(sample[3])
+        targets.append(torch.FloatTensor(sample[4]))
+    return torch.stack(imgs, 0), torch.stack(imgs_80, 0), torch.stack(imgs_RC20, 0), torch.stack(imgs_RC40, 0),targets
+
+
+if __name__ == '__main__':
+    data_set = SignalDetectionv2(r'C:\Users\华为\Desktop\Modulation_Detection\data\train\train_data',
+                                 r'C:\Users\华为\Desktop\Modulation_Detection\data\train\train_label', True)
+
+    data_loader = data.DataLoader(data_set, 10,
+                                  num_workers=1, shuffle=True,
+                                  collate_fn=detection_collate, pin_memory=True)
+    batch_iterator = iter(data_loader)
+    sample1, sample80,sample2 ,sample3 ,target1= next(batch_iterator)
+    # sample1_, sample2_,target2 = next(batch_iterator)
+    sample1= sample1.numpy()
+    sample80 = sample80.numpy()
+    sample2 = sample2.numpy()
+    sample3 = sample3.numpy()
+
+
+    # target1 = target1.numpy()
+
+    import scipy.io as scio
+    scio.savemat('fft_RC20_RC40.mat', {'sample1': sample1, 'sample2': sample2,'sample3': sample3,'sample80': sample80})
+    print("wait")
+
