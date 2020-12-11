@@ -9,50 +9,15 @@ import numpy as np
 from utils.data_augmentation import *
 
 
-def concat_data(path_):
-    path = path_ + '_'
-    # data_ = np.load(path +'1.npy')
-    print(path_)
-    path = os.path.abspath(path)
-    data_ = np.load(path+'1.npz',allow_pickle = True)['datas_10_fft']
-    data_RC20 = np.load(path + '1.npz', allow_pickle=True)['datas_RC20']
-    data_RC40 = np.load(path + '1.npz', allow_pickle=True)['datas_RC40']
-    data_80 = np.load(path + '1.npz', allow_pickle=True)['datas_80_fft']
-    i = 2
-    while os.path.exists(path + str(i) + '.npz'):
-        print('loading data '+path + str(i) + '.npz....')
-        new_data = np.load(path + str(i) + '.npz', allow_pickle=True)['datas_10_fft']
-        new_data_RC20 = np.load(path + str(i) + '.npz', allow_pickle=True)['datas_RC20']
-        new_data_RC40 = np.load(path + str(i) + '.npz', allow_pickle=True)['datas_RC40']
-        new_data_80 = np.load(path + str(i) + '.npz', allow_pickle=True)['datas_80_fft']
-        data_ = np.concatenate((data_, new_data), axis=0)
-        data_RC20 = np.concatenate((data_RC20, new_data_RC20), axis=0)
-        data_RC40 = np.concatenate((data_RC40, new_data_RC40), axis=0)
-        data_80 = np.concatenate((data_80, new_data_80), axis=0)
-        i += 1
-    return data_,data_80,data_RC20,data_RC40
 
 
-
-def concat_label(path_):
-    path = path_ + '_'
-    # data_ = np.load(path +'1.npy')
-    print(path_)
-    path=os.path.abspath(path)
-    data_ = np.load(path+'1.npz',allow_pickle = True)['labels']
-    i = 2
-    while os.path.exists(path + str(i) + '.npz'):
-        print('loading data '+path + str(i) + '.npz....')
-        new_data = np.load(path + str(i) + '.npz', allow_pickle=True)['labels']
-        data_ = np.concatenate((data_, new_data), axis=0)
-        i += 1
-    return data_
-
-class SignalDetectionv2(data.Dataset):
+class SignalDetection(data.Dataset):
     def __init__(self, data_root, label_root, data_aug=False, dataset_name='SignalDetedtion'):
         self.data_root = data_root
         self.label_root = label_root
-        self.data,self.data_80,self.dataRC20,self.dataRC40, self.labels = self.load_json()
+        ##这里是否可以一次加载多个npz文件 之后每次读取一个batchsize大小的文件 否则每次只能对一个npz进行训练  todo 写出使用yield读取多个npz文件的函数
+
+        self.data,self.data_80,self.dataRC20,self.dataRC40, self.labels = self.load_data_label()
         self.data_aug = data_aug
         self.dataset_name = dataset_name
 
@@ -69,26 +34,19 @@ class SignalDetectionv2(data.Dataset):
                 seq,seq_80,seq_RC20,seq_RC40, seq_label = sample_filplr(seq,seq_80,seq_RC20,seq_RC40, seq_label)
             seq,seq_80,seq_RC20,seq_RC40, seq_label = sample_jitter(seq,seq_80,seq_RC20,seq_RC40, seq_label)
             seq,seq_80,seq_RC20,seq_RC40, seq_label = sample_shift(seq,seq_80,seq_RC20,seq_RC40, seq_label)
-
-        import scipy.io as scio
-        # scio.savemat('1.mat',
-        #              {'new_data': seq, 'new_dataRC20': seq_RC20, 'new_dataRC40': seq_RC40, 'label': seq_label})
-
-        #转换为torch
+        #转换为tensor
         seq = torch.from_numpy(seq).type(torch.FloatTensor)
         seq_80 = torch.from_numpy(seq_80).type(torch.FloatTensor)
         seq_RC20 = torch.from_numpy(seq_RC20).type(torch.FloatTensor)
         seq_RC40 = torch.from_numpy(seq_RC40).type(torch.FloatTensor)
-
         # n x 3, n is the number of objects for each sequence
         labels = torch.from_numpy(seq_label).type(torch.FloatTensor).view(-1, 3)
-
         return seq ,seq_80,seq_RC20, seq_RC40, labels
 
     def __len__(self):
         return len(self.data)
 
-    def load_json(self):
+    def load_data_label(self):
         dirs = os.listdir(self.label_root)
         for label_name in dirs:
             if label_name.endswith('.npz'):
@@ -96,10 +54,11 @@ class SignalDetectionv2(data.Dataset):
         dirs = os.listdir(self.data_root)
         for data_name in dirs:
             if data_name.endswith('.npz'):
-                data = np.load(os.path.join(self.data_root, data_name), allow_pickle=True)['datas_10_fft']
-                data_RC20 = np.load(os.path.join(self.data_root, data_name), allow_pickle=True)['datas_RC20']
-                data_RC40 = np.load(os.path.join(self.data_root, data_name), allow_pickle=True)['datas_RC40']
-                data_80 = np.load(os.path.join(self.data_root, data_name), allow_pickle=True)['datas_80_fft']
+                temp_data = np.load(os.path.join(self.data_root, data_name), allow_pickle=True)
+                data = temp_data['datas_10_fft']
+                data_RC20 = temp_data['datas_RC20']
+                data_RC40 = temp_data['datas_RC40']
+                data_80 = temp_data['datas_80_fft']
         return data,data_80,data_RC20,data_RC40, label
 
     def pull_seq(self, idx):
@@ -117,12 +76,7 @@ class SignalDetectionv2(data.Dataset):
 
 
 def detection_collate(batch):
-
-    targets = []
-    imgs = []
-    imgs_RC20 = []
-    imgs_RC40 = []
-    imgs_80 = []
+    targets, imgs, imgs_RC20, imgs_RC40, imgs_80 = [],[],[],[],[]
     for sample in batch:
         imgs.append(sample[0])
         imgs_80.append(sample[1])
@@ -133,8 +87,8 @@ def detection_collate(batch):
 
 
 if __name__ == '__main__':
-    data_set = SignalDetectionv2(r'C:\Users\华为\Desktop\Modulation_Detection\data\train\train_data',
-                                 r'C:\Users\华为\Desktop\Modulation_Detection\data\train\train_label', True)
+    data_set = SignalDetection('../train_data',
+                                 '../train_label', True)
 
     data_loader = data.DataLoader(data_set, 10,
                                   num_workers=1, shuffle=True,
